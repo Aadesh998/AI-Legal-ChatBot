@@ -74,3 +74,5 @@ You can deploy this app on platforms like:
 - 🔗 [Groq API](https://groq.com)
 - 🧠 [MiniCPM Vision LLM](https://huggingface.co/openbmb/MiniCPM-Llama3-V-2_5-int4)
 - 📺 [Streamlit](https://streamlit.io)
+
+
