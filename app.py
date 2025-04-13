@@ -12,7 +12,6 @@ import faiss
 import numpy as np
 from textwrap import dedent
 
-
 # ========== Setup ==========
 load_dotenv()
 api_key = os.getenv('GROQ_API_KEY')
@@ -20,8 +19,6 @@ client = Groq(api_key=api_key)
 
 st.set_page_config(page_title="AI Legal Chatbot", layout="wide")
 st.title("⚖️ AI Legal Chatbot")
-
-
 
 # ========== Load Models ==========
 @st.cache_resource
@@ -42,22 +39,21 @@ embedding_model = load_embedder()
 # ========== Session State ==========
 if "history" not in st.session_state:
     st.session_state.history = []
-
 if "pdf_mode" not in st.session_state:
     st.session_state.pdf_mode = False
-
 if "chunks" not in st.session_state:
     st.session_state.chunks = []
-
 if "index" not in st.session_state:
     st.session_state.index = None
+if "ocr_done" not in st.session_state:
+    st.session_state.ocr_done = False
 
 # ========== Sidebar Upload ==========
 with st.sidebar:
     st.header("📎 Upload PDF")
     uploaded_pdf = st.file_uploader("Upload your legal PDF", type=["pdf"])
 
-    if uploaded_pdf:
+    if uploaded_pdf and not st.session_state.ocr_done:
         temp_path = "temp_uploaded.pdf"
         with open(temp_path, "wb") as f:
             f.write(uploaded_pdf.read())
@@ -80,7 +76,6 @@ with st.sidebar:
             img = Image.open(img_path).convert('RGB')
             msgs = [{"role": "user", "content": "Extract the text from the image. Just give only image text."}]
             system_role = "You are an AI that extracts and transcribes text from images."
-
             res = model.chat(image=img, msgs=msgs, tokenizer=tokenizer, sampling=True,
                              temperature=0.7, system_prompt=system_role)
             return ''.join(res)
@@ -115,6 +110,7 @@ with st.sidebar:
             st.session_state.pdf_mode = True
             st.session_state.chunks = chunks
             st.session_state.index = index
+            st.session_state.ocr_done = True
             st.success("PDF processed successfully!")
 
 # ========== Chat Section ==========
@@ -159,5 +155,3 @@ if user_input:
         reply = response.choices[0].message.content
         st.chat_message("assistant").write(reply)
         st.session_state.history.append({"role": "assistant", "content": reply})
-
-
