@@ -1,0 +1,14 @@
+streamlit
+pandas
+python-dotenv
+groq
+pymupdf
+pillow
+torch
+torchvision
+transformers
+sentencepiece
+accelerate
+bitsandbytes
+faiss-cpu
+sentence-transformers
