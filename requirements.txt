@@ -12,3 +12,4 @@ accelerate
 bitsandbytes
 faiss-cpu
 sentence-transformers
+mistralai
