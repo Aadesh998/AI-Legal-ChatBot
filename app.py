@@ -10,7 +10,7 @@ from transformers import AutoModel, AutoTokenizer
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
-from textwrap import dedent
+
 
 # ========== Setup ==========
 load_dotenv()
@@ -19,6 +19,7 @@ client = Groq(api_key=api_key)
 
 st.set_page_config(page_title="AI Legal Chatbot", layout="wide")
 st.title("⚖️ AI Legal Chatbot")
+
 
 # ========== Load Models ==========
 @st.cache_resource
@@ -36,73 +37,101 @@ def load_embedder():
 
 embedding_model = load_embedder()
 
+
 # ========== Session State ==========
 if "history" not in st.session_state:
     st.session_state.history = []
+
 if "pdf_mode" not in st.session_state:
     st.session_state.pdf_mode = False
+
 if "chunks" not in st.session_state:
     st.session_state.chunks = []
+
 if "index" not in st.session_state:
     st.session_state.index = None
-if "ocr_done" not in st.session_state:
-    st.session_state.ocr_done = False
+
+
+# ========== Helper Functions ==========
+def pdf_to_images(pdf_path, output_folder="pdf_images"):
+    pdf_doc = fitz.open(pdf_path)
+    if os.path.exists(output_folder):
+        shutil.rmtree(output_folder)
+    os.makedirs(output_folder)
+
+    for page_number in range(len(pdf_doc)):
+        page = pdf_doc.load_page(page_number)
+        pix = page.get_pixmap()
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img.save(os.path.join(output_folder, f"page_{page_number+1}.png"))
+
+    return output_folder
+
+
+def ocr_image(img_path):
+    img = Image.open(img_path).convert('RGB')
+    msgs = [{"role": "user", "content": "Extract the text from the image. Just give only image text."}]
+    system_role = "You are an AI that extracts and transcribes text from images."
+
+    res = model.chat(image=img, msgs=msgs, tokenizer=tokenizer, sampling=True,
+                     temperature=0.7, system_prompt=system_role)
+    return ''.join(res)
+
+
+def split_chunks(text, chunk_size=500):
+    sentences = text.split('. ')
+    chunks, chunk = [], ""
+    for sent in sentences:
+        if len(chunk) + len(sent) < chunk_size:
+            chunk += sent + ". "
+        else:
+            chunks.append(chunk.strip())
+            chunk = sent + ". "
+    if chunk:
+        chunks.append(chunk.strip())
+    return chunks
+
 
 # ========== Sidebar Upload ==========
+# ========== Sidebar Upload ==========
 with st.sidebar:
-    st.header("📎 Upload PDF")
-    uploaded_pdf = st.file_uploader("Upload your legal PDF", type=["pdf"])
+    st.header("📎 Upload Files")
+    uploaded_files = st.file_uploader(
+        "Upload your legal documents (PDF or images)",
+        type=["pdf", "png", "jpg", "jpeg"],
+        accept_multiple_files=True
+    )
 
-    if uploaded_pdf and not st.session_state.ocr_done:
-        temp_path = "temp_uploaded.pdf"
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_pdf.read())
-
-        def pdf_to_images(pdf_path, output_folder="pdf_images"):
-            pdf_doc = fitz.open(pdf_path)
-            if os.path.exists(output_folder):
-                shutil.rmtree(output_folder)
-            os.makedirs(output_folder)
-
-            for page_number in range(len(pdf_doc)):
-                page = pdf_doc.load_page(page_number)
-                pix = page.get_pixmap()
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                img.save(os.path.join(output_folder, f"page_{page_number+1}.png"))
-
-            return output_folder
-
-        def ocr_image(img_path):
-            img = Image.open(img_path).convert('RGB')
-            msgs = [{"role": "user", "content": "Extract the text from the image. Just give only image text."}]
-            system_role = "You are an AI that extracts and transcribes text from images."
-            res = model.chat(image=img, msgs=msgs, tokenizer=tokenizer, sampling=True,
-                             temperature=0.7, system_prompt=system_role)
-            return ''.join(res)
-
-        def extract_pdf_text(pdf_file):
-            folder = pdf_to_images(pdf_file)
-            full_text = ""
+    def process_uploaded_file(uploaded_file):
+        if uploaded_file.name.endswith(".pdf"):
+            temp_path = "temp_uploaded.pdf"
+            with open(temp_path, "wb") as f:
+                f.write(uploaded_file.read())
+            folder = pdf_to_images(temp_path)
+            text = ""
             for file in sorted(os.listdir(folder)):
-                full_text += ocr_image(os.path.join(folder, file)) + "\n"
-            return full_text
+                text += ocr_image(os.path.join(folder, file)) + "\n"
+            return text
 
-        with st.spinner("🔍 Performing OCR..."):
-            extracted_text = extract_pdf_text(temp_path)
+        elif uploaded_file.name.lower().endswith(('.png', '.jpg', '.jpeg')):
+            os.makedirs("temp_images", exist_ok=True)
+            img_path = os.path.join("temp_images", uploaded_file.name)
+            with open(img_path, "wb") as f:
+                f.write(uploaded_file.read())
+            return ocr_image(img_path)
 
-            def split_chunks(text, chunk_size=500):
-                sentences = text.split('. ')
-                chunks, chunk = [], ""
-                for sent in sentences:
-                    if len(chunk) + len(sent) < chunk_size:
-                        chunk += sent + ". "
-                    else:
-                        chunks.append(chunk.strip())
-                        chunk = sent + ". "
-                if chunk: chunks.append(chunk.strip())
-                return chunks
+        return ""
 
-            chunks = split_chunks(extracted_text)
+    # Process uploaded files only if new ones are uploaded or not yet processed
+    if uploaded_files and "last_uploaded_files" not in st.session_state or \
+       [f.name for f in uploaded_files] != st.session_state.get("last_uploaded_files", []):
+
+        with st.spinner("🔍 Extracting and embedding text..."):
+            all_extracted_text = ""
+            for file in uploaded_files:
+                all_extracted_text += process_uploaded_file(file) + "\n"
+
+            chunks = split_chunks(all_extracted_text)
             embeddings = embedding_model.encode(chunks)
             index = faiss.IndexFlatL2(embeddings.shape[1])
             index.add(np.array(embeddings))
@@ -110,8 +139,13 @@ with st.sidebar:
             st.session_state.pdf_mode = True
             st.session_state.chunks = chunks
             st.session_state.index = index
-            st.session_state.ocr_done = True
-            st.success("PDF processed successfully!")
+            st.session_state.last_uploaded_files = [f.name for f in uploaded_files]
+            st.success("Files processed successfully!")
+
+        # Optional cleanup
+        if os.path.exists("temp_images"):
+            shutil.rmtree("temp_images")
+
 
 # ========== Chat Section ==========
 st.divider()
@@ -132,7 +166,6 @@ if user_input:
     st.chat_message("user").write(user_input)
 
     if st.session_state.pdf_mode:
-        # If PDF is uploaded, use context-based retrieval
         q_embed = embedding_model.encode([user_input])
         _, top_idxs = st.session_state.index.search(np.array(q_embed), 3)
         retrieved = "\n".join([st.session_state.chunks[i] for i in top_idxs[0]])
@@ -143,7 +176,6 @@ if user_input:
             {"role": "user", "content": f"{context}\n\nQuestion: {user_input}"}
         ]
     else:
-        # Free-form chat
         messages = st.session_state.history
 
     with st.spinner("AI is thinking..."):
